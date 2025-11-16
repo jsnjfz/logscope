@@ -39,10 +39,10 @@ Technical Features
 ## Usage
 
 1. 打开 `Settings -> Tools -> V2EX LogScope` 配置 API Token  
-2. 根据需求填写代理信息  
+2. 根据需要填写代理信息  
 3. 打开底部工具栏中的 `System Log` 工具窗口  
 4. 在左侧节点区域选择任意 V2EX 分类  
-5. 点击任意日志行即可阅读话题或回复；需要伪装时使用 MASK 切换
+5. 点击任意日志行即可阅读话题与回复；需要伪装时使用 MASK 切换
 
 ## Developer
 
@@ -52,6 +52,10 @@ Technical Features
 
 Configuration UI is inspired by [FormatToday/v2-viewer](https://github.com/FormatToday/v2-viewer)  
 配置界面参考了 [FormatToday/v2-viewer](https://github.com/FormatToday/v2-viewer)，感谢原作者的优秀实现
+
+## Screenshots
+
+![LogScope screenshot](page.jpg)
 
 ## Repository
 
