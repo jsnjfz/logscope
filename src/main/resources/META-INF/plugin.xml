@@ -1,0 +1,29 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <id>com.github.jsnjfz.logscope</id>
+    <name>V2EX LogScope</name>
+    <vendor>jsnjfz</vendor>
+
+    <depends>com.intellij.modules.platform</depends>
+    
+    <idea-version since-build="232"/>
+
+    <resource-bundle>messages.LogScopeBundle</resource-bundle>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow factoryClass="com.github.jsnjfz.logscope.toolWindow.V2EXToolWindowFactory"
+                    id="System Log"
+                    anchor="bottom"/>
+        <applicationService
+                serviceImplementation="com.github.jsnjfz.logscope.settings.V2EXSettings"/>
+        <applicationConfigurable
+                parentId="tools"
+                instance="com.github.jsnjfz.logscope.settings.V2EXSettingsConfigurable"
+                id="com.github.jsnjfz.logscope.settings.V2EXSettingsConfigurable"
+                displayName="V2EX LogScope"/>
+    </extensions>
+</idea-plugin>
+
+
+
+
