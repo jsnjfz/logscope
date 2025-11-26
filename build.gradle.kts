@@ -38,6 +38,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.json:json:20240303")
     implementation("com.github.spullara.mustache.java:compiler:0.9.14")
+    implementation("org.jsoup:jsoup:1.17.2")
 
     intellijPlatform {
         create(providers.gradleProperty("platformType"), providers.gradleProperty("platformVersion"))

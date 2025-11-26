@@ -11,6 +11,10 @@ import com.intellij.util.ui.JBUI;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -69,18 +73,31 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
             "(https?://\\S+?\\.(?:png|jpe?g|gif|webp|bmp)(?:\\?\\S*)?)",
             Pattern.CASE_INSENSITIVE
     );
+    private static final Pattern TOPIC_ID_PATTERN = Pattern.compile("/t/(\\d+)", Pattern.CASE_INSENSITIVE);
 
     private JButton prevButton;
     private JButton nextButton;
 
     private static final NodeOption[] NODE_OPTIONS = new NodeOption[]{
-            new NodeOption("hot", "filter.node.hot"),
             new NodeOption("tech", "filter.node.tech"),
-            new NodeOption("creative", "filter.node.creative"),
+            new NodeOption("creative", "filter.node.creative", EndpointType.TAB_PAGE, "creative"),
             new NodeOption("play", "filter.node.play"),
-            new NodeOption("hot_topics", "filter.node.hot_topics"),
-            new NodeOption("all", "filter.node.all")
+            new NodeOption("apple", "filter.node.apple"),
+            new NodeOption("jobs", "filter.node.jobs"),
+            new NodeOption("deals", "filter.node.deals"),
+            new NodeOption("city", "filter.node.city", EndpointType.TAB_PAGE, "city"),
+            new NodeOption("qna", "filter.node.qna"),
+            new NodeOption("hot", "filter.node.hot", "hot.json"),
+            new NodeOption("all", "filter.node.all", "latest.json"),
+            new NodeOption("r2", "filter.node.r2", EndpointType.TAB_PAGE, "r2"),
+            new NodeOption("nodes", "filter.node.nodes", EndpointType.TAB_PAGE, "nodes")
     };
+
+    private enum EndpointType {
+        NODE_SHOW,
+        DIRECT_JSON,
+        TAB_PAGE
+    }
 
     private static class TopicInfo {
         final int id;
@@ -101,10 +118,22 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
     private static class NodeOption {
         final String key;
         final String labelKey;
+        final EndpointType type;
+        final String customPath;
 
         NodeOption(String key, String labelKey) {
+            this(key, labelKey, EndpointType.NODE_SHOW, null);
+        }
+
+        NodeOption(String key, String labelKey, String apiPath) {
+            this(key, labelKey, EndpointType.DIRECT_JSON, apiPath);
+        }
+
+        NodeOption(String key, String labelKey, EndpointType type, String customPath) {
             this.key = key;
             this.labelKey = labelKey;
+            this.type = type;
+            this.customPath = customPath;
         }
 
         @Override
@@ -214,6 +243,7 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
         JLabel scopeLabel = new JLabel(LogScopeBundle.message("filter.scope"));
         scopeLabel.setForeground(JBColor.GRAY);
         scopeLabel.setFont(scopeLabel.getFont().deriveFont(Font.BOLD));
+        scopeLabel.setBorder(JBUI.Borders.emptyRight(6));
 
         nodeSelector = new JComboBox<>(NODE_OPTIONS);
         nodeSelector.setFocusable(false);
@@ -368,26 +398,47 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
             return;
         }
 
+        NodeOption option = getCurrentOption();
+
         showLoadingState();
 
         SwingWorker<String, Void> worker = new SwingWorker<>() {
             @Override
             protected String doInBackground() {
-                String apiUrl = getNodeApiUrl();
+                if (option == null) {
+                    return LogScopeBundle.message("error.loading", "invalid node");
+                }
                 OkHttpClient client = clientBuilder.proxy(getProxy(settings)).build();
-                Request request = new Request.Builder()
-                        .url(apiUrl)
-                        .header("Authorization", "Bearer " + token)
-                        .build();
-
-                try (Response response = client.newCall(request).execute()) {
-                    if (!response.isSuccessful()) {
-                        return LogScopeBundle.message("error.request",
-                                response.code() + " " + response.message());
+                try {
+                    if (option.type == EndpointType.TAB_PAGE) {
+                        String tabUrl = getTabUrl(option);
+                        Request request = new Request.Builder()
+                                .url(tabUrl)
+                                .build();
+                        try (Response response = client.newCall(request).execute()) {
+                            if (!response.isSuccessful()) {
+                                return LogScopeBundle.message("error.request",
+                                        response.code() + " " + response.message());
+                            }
+                            return formatTabTopicList(response.body().string(), option);
+                        }
                     }
 
-                    JSONArray topics = new JSONArray(response.body().string());
-                    return formatTopicList(topics);
+                    String apiUrl = getNodeApiUrl(option);
+                    Request request = new Request.Builder()
+                            .url(apiUrl)
+                            .header("Authorization", "Bearer " + token)
+                            .build();
+
+                    try (Response response = client.newCall(request).execute()) {
+                        if (!response.isSuccessful()) {
+                            return LogScopeBundle.message("error.request",
+                                    response.code() + " " + response.message());
+                        }
+
+                        JSONArray topics = new JSONArray(response.body().string());
+                        return formatTopicList(topics);
+                    }
                 } catch (IOException ex) {
                     return LogScopeBundle.message("error.loading", ex.getMessage());
                 }
@@ -755,15 +806,99 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
 
     /**
      */
-    private String getNodeApiUrl() {
+    private String getNodeApiUrl(NodeOption option) {
         String baseUrl = "https://www.v2ex.com/api/topics/";
-        return baseUrl + switch (currentNode) {
-            case "tech" -> "show.json?node_name=tech";
-            case "creative" -> "show.json?node_name=creative";
-            case "play" -> "show.json?node_name=play";
-            case "all" -> "latest.json";
-            default -> "hot.json";
+        return switch (option.type) {
+            case DIRECT_JSON -> baseUrl + option.customPath;
+            case NODE_SHOW -> baseUrl + "show.json?node_name=" + option.key;
+            default -> baseUrl + "hot.json";
         };
+    }
+
+    private String getTabUrl(NodeOption option) {
+        String tabKey = option.customPath != null ? option.customPath : option.key;
+        return "https://www.v2ex.com/?tab=" + tabKey;
+    }
+
+    private NodeOption getCurrentOption() {
+        for (NodeOption option : NODE_OPTIONS) {
+            if (option.key.equals(currentNode)) {
+                return option;
+            }
+        }
+        return NODE_OPTIONS.length > 0 ? NODE_OPTIONS[0] : null;
+    }
+
+    private String formatTabTopicList(String html, NodeOption option) {
+        currentTopics.clear();
+        if (html == null || html.isEmpty()) {
+            return LogScopeBundle.message("error.loading", "empty tab page");
+        }
+
+        Document document = Jsoup.parse(html);
+        Elements items = document.select("div.cell.item");
+        if (items.isEmpty()) {
+            return LogScopeBundle.message("error.loading", "no tab topics");
+        }
+
+        V2EXSettings settings = V2EXSettings.getInstance();
+        int displayLimit = Math.max(1, settings.topicDisplayLimit);
+
+        for (Element item : items) {
+            Element titleAnchor = item.selectFirst(".item_title a[href^=/t/]");
+            if (titleAnchor == null) {
+                continue;
+            }
+            int id = extractTopicId(titleAnchor.attr("href"));
+            if (id <= 0) {
+                continue;
+            }
+            String title = titleAnchor.text();
+
+            Element repliesEl = item.selectFirst(".count_livid, .count_orange");
+            int replies = parseReplies(repliesEl != null ? repliesEl.text() : null);
+
+            Element nodeEl = item.selectFirst("a.node");
+            String nodeTitle = nodeEl != null ? nodeEl.text() : option.key;
+
+            Element authorEl = item.selectFirst(".small.fade a[href^=/member/]");
+            String author = authorEl != null ? authorEl.text() : "";
+
+            currentTopics.add(new TopicInfo(id, title, replies, nodeTitle, author));
+            if (currentTopics.size() >= displayLimit) {
+                break;
+            }
+        }
+
+        if (currentTopics.isEmpty()) {
+            return LogScopeBundle.message("error.loading", "no tab topics");
+        }
+        return "";
+    }
+
+    private int extractTopicId(String href) {
+        if (href == null) {
+            return -1;
+        }
+        Matcher matcher = TOPIC_ID_PATTERN.matcher(href);
+        if (matcher.find()) {
+            try {
+                return Integer.parseInt(matcher.group(1));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return -1;
+    }
+
+    private int parseReplies(String text) {
+        if (text == null || text.isBlank()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(text.trim());
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     private void showNoTokenWarning() {
