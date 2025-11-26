@@ -81,7 +81,7 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
     private static final NodeOption[] NODE_OPTIONS = new NodeOption[]{
             new NodeOption("tech", "filter.node.tech"),
             new NodeOption("creative", "filter.node.creative", EndpointType.TAB_PAGE, "creative"),
-            new NodeOption("play", "filter.node.play"),
+            new NodeOption("play", "filter.node.play", EndpointType.TAB_PAGE, "play"),
             new NodeOption("apple", "filter.node.apple"),
             new NodeOption("jobs", "filter.node.jobs"),
             new NodeOption("deals", "filter.node.deals"),
