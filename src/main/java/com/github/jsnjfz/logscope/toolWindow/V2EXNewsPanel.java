@@ -8,8 +8,11 @@ import com.intellij.ui.JBColor;
 import com.intellij.ui.components.ActionLink;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.util.ui.JBUI;
+import okhttp3.FormBody;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
+import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -22,7 +25,9 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.InputEvent;
 import java.awt.event.ItemEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.IOException;
@@ -49,6 +54,13 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
     private final CardLayout displayCardLayout;
     private final JPanel stealthPanel;
 
+    private JTextArea replyInputArea;
+    private JButton replySendButton;
+    private JLabel replyStatusLabel;
+    private JPanel replySectionPanel;
+    private JButton replyPanelButton;
+    private boolean replyPanelVisible = false;
+
     private JToggleButton stealthToggle;
     private JComboBox<NodeOption> nodeSelector;
     private boolean updatingNodeSelector = false;
@@ -74,6 +86,7 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
             Pattern.CASE_INSENSITIVE
     );
     private static final Pattern TOPIC_ID_PATTERN = Pattern.compile("/t/(\\d+)", Pattern.CASE_INSENSITIVE);
+    private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
 
     private JButton prevButton;
     private JButton nextButton;
@@ -139,6 +152,30 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
         @Override
         public String toString() {
             return LogScopeBundle.message(labelKey);
+        }
+    }
+
+    private enum ReplyFeedback {
+        INFO,
+        SUCCESS,
+        ERROR
+    }
+
+    private static class ReplyResult {
+        final boolean success;
+        final String message;
+
+        private ReplyResult(boolean success, String message) {
+            this.success = success;
+            this.message = message;
+        }
+
+        static ReplyResult success(String message) {
+            return new ReplyResult(true, message);
+        }
+
+        static ReplyResult failure(String message) {
+            return new ReplyResult(false, message);
         }
     }
 
@@ -284,6 +321,11 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
         styleMinimalButton(prevButton);
         styleMinimalButton(nextButton);
 
+        replyPanelButton = new JButton(LogScopeBundle.message("action.reply.open"));
+        replyPanelButton.addActionListener(e -> toggleReplyPanel());
+        replyPanelButton.setEnabled(false);
+        styleMinimalButton(replyPanelButton);
+
         left.add(scopeLabel);
         left.add(nodeSelector);
         left.add(stealthToggle);
@@ -292,6 +334,7 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
         left.add(backButton);
         left.add(prevButton);
         left.add(nextButton);
+        left.add(replyPanelButton);
 
         strip.add(left, BorderLayout.WEST);
         return strip;
@@ -457,6 +500,71 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
         worker.execute();
     }
 
+    private void handleReplySubmit() {
+        if (replyInputArea == null || replySendButton == null) {
+            return;
+        }
+        String text = replyInputArea.getText() == null ? "" : replyInputArea.getText().trim();
+        if (text.isEmpty()) {
+            updateReplyStatus(LogScopeBundle.message("error.reply.empty"), ReplyFeedback.ERROR);
+            return;
+        }
+        if (currentTopicId <= 0) {
+            updateReplyStatus(LogScopeBundle.message("error.topic.not.found"), ReplyFeedback.ERROR);
+            return;
+        }
+        V2EXSettings settings = V2EXSettings.getInstance();
+        if (settings.apiToken.isEmpty()) {
+            updateReplyStatus(LogScopeBundle.message("error.no.token"), ReplyFeedback.ERROR);
+            return;
+        }
+
+        replySendButton.setEnabled(false);
+        updateReplyStatus(LogScopeBundle.message("reply.status.posting"), ReplyFeedback.INFO);
+
+        SwingWorker<ReplyResult, Void> worker = new SwingWorker<>() {
+            @Override
+            protected ReplyResult doInBackground() {
+                return submitReply(settings, text);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    ReplyResult result = get();
+                    updateReplyStatus(result.message, result.success ? ReplyFeedback.SUCCESS : ReplyFeedback.ERROR);
+                    replySendButton.setEnabled(true);
+                    if (result.success) {
+                        replyInputArea.setText("");
+                        showTopicContent(currentTopicId);
+                    }
+                } catch (Exception ex) {
+                    updateReplyStatus(LogScopeBundle.message("reply.status.failure", ex.getMessage()), ReplyFeedback.ERROR);
+                    replySendButton.setEnabled(true);
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void toggleReplyPanel() {
+        if (isShowingList) {
+            return;
+        }
+        replyPanelVisible = !replyPanelVisible;
+        JPanel topicPanel = getCurrentTopicPanel();
+        if (topicPanel != null) {
+            if (replyPanelVisible) {
+                topicPanel.add(getReplySection(), BorderLayout.SOUTH);
+            } else if (replySectionPanel != null && replySectionPanel.getParent() != null) {
+                topicPanel.remove(replySectionPanel);
+            }
+            topicPanel.revalidate();
+            topicPanel.repaint();
+        }
+        updateReplyButtonState();
+    }
+
     /**
      */
     private void showLoadingState() {
@@ -511,6 +619,7 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
     private void showTopicList() {
         if (!isShowingList) {
             isShowingList = true;
+            replyPanelVisible = false;
             updateContent("");
         }
     }
@@ -520,8 +629,10 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
     private void updateContent(String text) {
         ensureContentVisible();
         if (isShowingList) {
+            replyPanelVisible = false;
             renderTopicCards();
             updatePaginationButtons();
+            updateReplyButtonState();
             return;
         }
 
@@ -533,11 +644,75 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
         scrollPane.setBorder(JBUI.Borders.empty(5));
         scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         scrollPane.getVerticalScrollBar().setUnitIncrement(16);
-        contentPanel.add(scrollPane, BorderLayout.CENTER);
+        JPanel topicPanel = new JPanel(new BorderLayout());
+        topicPanel.add(scrollPane, BorderLayout.CENTER);
+        if (replyPanelVisible) {
+            topicPanel.add(getReplySection(), BorderLayout.SOUTH);
+        }
+        contentPanel.add(topicPanel, BorderLayout.CENTER);
         contentPanel.revalidate();
         contentPanel.repaint();
         SwingUtilities.invokeLater(() -> scrollPane.getVerticalScrollBar().setValue(0));
         updatePaginationButtons();
+        updateReplyButtonState();
+    }
+
+    private JPanel getReplySection() {
+        if (replySectionPanel == null) {
+            replySectionPanel = buildReplySection();
+        }
+        Container parent = replySectionPanel.getParent();
+        if (parent != null) {
+            parent.remove(replySectionPanel);
+        }
+        return replySectionPanel;
+    }
+
+    private JPanel buildReplySection() {
+        JPanel wrapper = new JPanel(new BorderLayout());
+        wrapper.setBorder(JBUI.Borders.empty(8, 12, 12, 12));
+
+        JPanel editorContainer = new JPanel(new BorderLayout());
+        editorContainer.setBorder(JBUI.Borders.compound(
+                JBUI.Borders.customLine(JBColor.border(), 1),
+                JBUI.Borders.empty(4)
+        ));
+
+        replyInputArea = new JTextArea();
+        replyInputArea.setLineWrap(true);
+        replyInputArea.setWrapStyleWord(true);
+        replyInputArea.setRows(4);
+        replyInputArea.setMargin(JBUI.insets(4));
+        replyInputArea.setFont(getDisplayFont(V2EXSettings.getInstance()));
+        replyInputArea.setToolTipText(LogScopeBundle.message("reply.placeholder"));
+        replyInputArea.getInputMap(JComponent.WHEN_FOCUSED)
+                .put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.CTRL_DOWN_MASK), "sendReply");
+        replyInputArea.getActionMap().put("sendReply", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                handleReplySubmit();
+            }
+        });
+
+        JBScrollPane replyScrollPane = new JBScrollPane(replyInputArea);
+        replyScrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        replyScrollPane.getVerticalScrollBar().setUnitIncrement(12);
+        replyScrollPane.setBorder(JBUI.Borders.empty());
+        editorContainer.add(replyScrollPane, BorderLayout.CENTER);
+
+        JPanel actionPanel = new JPanel(new BorderLayout());
+        actionPanel.setBorder(JBUI.Borders.emptyTop(6));
+        replyStatusLabel = new JLabel(LogScopeBundle.message("reply.status.helper"));
+        replyStatusLabel.setForeground(JBColor.GRAY);
+        replySendButton = new JButton(LogScopeBundle.message("action.reply.send"));
+        replySendButton.addActionListener(e -> handleReplySubmit());
+        replySendButton.setMargin(JBUI.insets(2, 12));
+        actionPanel.add(replyStatusLabel, BorderLayout.CENTER);
+        actionPanel.add(replySendButton, BorderLayout.EAST);
+
+        editorContainer.add(actionPanel, BorderLayout.SOUTH);
+        wrapper.add(editorContainer, BorderLayout.CENTER);
+        return wrapper;
     }
 
     /**
@@ -659,6 +834,11 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
         }
         currentTopicId = topicId;
         isShowingList = false;
+        replyPanelVisible = false;
+        if (replySectionPanel != null && replySectionPanel.getParent() != null) {
+            Container parent = replySectionPanel.getParent();
+            parent.remove(replySectionPanel);
+        }
 
         showLoadingState();
 
@@ -751,6 +931,118 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
     private void updatePaginationButtons() {
         prevButton.setEnabled(!isShowingList && currentPage > 1);
         nextButton.setEnabled(!isShowingList && (currentPage * REPLIES_PER_PAGE) < totalReplies);
+    }
+
+    private void updateReplyButtonState() {
+        if (replyPanelButton == null) {
+            return;
+        }
+        replyPanelButton.setEnabled(!isShowingList);
+        String key = replyPanelVisible ? "action.reply.hide" : "action.reply.open";
+        replyPanelButton.setText(LogScopeBundle.message(key));
+    }
+
+    private JPanel getCurrentTopicPanel() {
+        if (contentPanel.getComponentCount() == 0) {
+            return null;
+        }
+        Component component = contentPanel.getComponent(0);
+        return component instanceof JPanel ? (JPanel) component : null;
+    }
+
+    private ReplyResult submitReply(V2EXSettings settings, String content) {
+        OkHttpClient client = clientBuilder.proxy(getProxy(settings)).build();
+        ReplyResult modernResult = postReplyViaV2(client, settings.apiToken, content, currentTopicId);
+        if (modernResult != null) {
+            return modernResult;
+        }
+        return postReplyViaLegacy(client, settings.apiToken, content, currentTopicId);
+    }
+
+    private ReplyResult postReplyViaV2(OkHttpClient client, String token, String content, int topicId) {
+        String url = String.format("https://www.v2ex.com/api/v2/topics/%d/replies", topicId);
+        RequestBody body;
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("content", content);
+            body = RequestBody.create(JSON_MEDIA_TYPE, payload.toString());
+        } catch (Exception ex) {
+            return ReplyResult.failure(LogScopeBundle.message("reply.status.failure", ex.getMessage()));
+        }
+
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer " + token)
+                .post(body)
+                .build();
+
+        try (Response response = client.newCall(request).execute()) {
+            if (response.code() == 404 || response.code() == 405) {
+                return null;
+            }
+            String payload = responseBody(response);
+            if (response.isSuccessful()) {
+                return ReplyResult.success(LogScopeBundle.message("reply.status.success"));
+            }
+            String failureMessage = payload.isBlank() ? response.message() : payload;
+            return ReplyResult.failure(LogScopeBundle.message("reply.status.failure",
+                    response.code() + " " + failureMessage));
+        } catch (IOException ex) {
+            return ReplyResult.failure(LogScopeBundle.message("reply.status.failure", ex.getMessage()));
+        }
+    }
+
+    private ReplyResult postReplyViaLegacy(OkHttpClient client, String token, String content, int topicId) {
+        RequestBody formBody = new FormBody.Builder()
+                .add("topic_id", String.valueOf(topicId))
+                .add("content", content)
+                .build();
+        Request request = new Request.Builder()
+                .url("https://www.v2ex.com/api/replies/create.json")
+                .header("Authorization", "Bearer " + token)
+                .post(formBody)
+                .build();
+
+        try (Response response = client.newCall(request).execute()) {
+            String payload = responseBody(response);
+            if (response.isSuccessful()) {
+                String successMessage = LogScopeBundle.message("reply.status.success");
+                if (!payload.isBlank()) {
+                    try {
+                        JSONObject json = new JSONObject(payload);
+                        String serverMessage = json.optString("message");
+                        if (serverMessage != null && !serverMessage.isBlank()) {
+                            successMessage = serverMessage;
+                        }
+                    } catch (Exception ignored) {
+                        // ignore invalid payload
+                    }
+                }
+                return ReplyResult.success(successMessage);
+            }
+            String failureMessage = payload.isBlank() ? response.message() : payload;
+            return ReplyResult.failure(LogScopeBundle.message("reply.status.failure",
+                    response.code() + " " + failureMessage));
+        } catch (IOException ex) {
+            return ReplyResult.failure(LogScopeBundle.message("reply.status.failure", ex.getMessage()));
+        }
+    }
+
+    private String responseBody(Response response) throws IOException {
+        return response.body() != null ? response.body().string() : "";
+    }
+
+    private void updateReplyStatus(String message, ReplyFeedback feedback) {
+        if (replyStatusLabel == null) {
+            return;
+        }
+        replyStatusLabel.setText(message);
+        Color color = switch (feedback) {
+            case SUCCESS -> JBColor.GREEN;
+            case ERROR -> JBColor.RED;
+            default -> JBColor.GRAY;
+        };
+        replyStatusLabel.setForeground(color);
     }
 
     private Font getDisplayFont(V2EXSettings settings) {
