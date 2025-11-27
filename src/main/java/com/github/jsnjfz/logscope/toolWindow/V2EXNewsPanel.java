@@ -1,4 +1,4 @@
-﻿package com.github.jsnjfz.logscope.toolWindow;
+package com.github.jsnjfz.logscope.toolWindow;
 
 import com.github.jsnjfz.logscope.LogScopeBundle;
 import com.github.jsnjfz.logscope.settings.V2EXSettings;
@@ -74,7 +74,7 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
 
     private final OkHttpClient.Builder clientBuilder;
 
-    private static final String FONT_SAMPLE_TEXT = "SAMPLE LOG TEXT 0123456789 妫€娴嬩腑鏂囧瓧浣?;
+    private static final String FONT_SAMPLE_TEXT = "SAMPLE LOG TEXT 0123456789 检测中文字体";
     private static final int REPLIES_PER_PAGE = 20;
     private static final int IMAGE_URL_LENGTH_THRESHOLD = 60;
     private static final int IMAGE_URL_PREFIX_LENGTH = 25;
