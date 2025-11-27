@@ -24,6 +24,8 @@ public class V2EXSettings implements PersistentStateComponent<V2EXSettings> {
 
     // API Token
     public String apiToken = "";
+    // Session cookie for reply actions
+    public String sessionCookie = "";
 
     // Proxy settings
     public boolean useProxy = false;

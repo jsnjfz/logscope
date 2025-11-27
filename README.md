@@ -44,7 +44,7 @@ Technical Features
 
 ## Usage
 
-1. 打开 `Settings -> Tools -> V2EX LogScope` 配置 API Token  
+1. 打开 `Settings -> Tools -> V2EX LogScope` 配置 API Token（如需回复请同时填写浏览器中的 Session Cookie/A2）  
 2. 根据需要填写代理信息  
 3. 打开底部工具栏中的 `System Log` 工具窗口  
 4. 在左侧节点区域选择任意 V2EX 分类  

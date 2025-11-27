@@ -31,6 +31,7 @@ import java.awt.event.ActionListener;
 public class V2EXSettingsConfigurable implements Configurable {
 
     private MaskedTokenField tokenField;
+    private JBTextField cookieField;
     private JComboBox<String> fontFamilyCombo;
     private JBIntSpinner fontSizeSpinner;
     private JBIntSpinner topicLimitSpinner;
@@ -96,6 +97,16 @@ public class V2EXSettingsConfigurable implements Configurable {
 
         c.gridx = 0;
         c.gridy = 1;
+        c.weightx = 0;
+        panel.add(new JLabel(LogScopeBundle.message("settings.cookie") + ":"), c);
+
+        cookieField = new JBTextField(settings.sessionCookie);
+        c.gridx = 1;
+        c.weightx = 1.0;
+        panel.add(cookieField, c);
+
+        c.gridx = 0;
+        c.gridy = 2;
         c.gridwidth = 2;
         ActionLink link = new ActionLink(LogScopeBundle.message("settings.token.get"),
                 (ActionListener) e -> BrowserUtil.browse("https://v2ex.com/settings/tokens"));
@@ -208,7 +219,8 @@ public class V2EXSettingsConfigurable implements Configurable {
         if (tokenField == null) {
             return false;
         }
-        boolean tokenChanged = !tokenField.getText().equals(settings.apiToken);
+        boolean tokenChanged = !tokenField.getText().equals(settings.apiToken)
+                || !cookieField.getText().equals(settings.sessionCookie);
         boolean fontChanged = !fontFamilyCombo.getSelectedItem().equals(settings.fontFamily)
                 || spinnerValue(fontSizeSpinner) != settings.fontSize
                 || spinnerValue(topicLimitSpinner) != settings.topicDisplayLimit
@@ -223,6 +235,7 @@ public class V2EXSettingsConfigurable implements Configurable {
     @Override
     public void apply() {
         settings.apiToken = tokenField.getText();
+        settings.sessionCookie = cookieField.getText();
         settings.fontFamily = (String) fontFamilyCombo.getSelectedItem();
         settings.fontSize = spinnerValue(fontSizeSpinner);
         settings.topicDisplayLimit = spinnerValue(topicLimitSpinner);
@@ -242,6 +255,7 @@ public class V2EXSettingsConfigurable implements Configurable {
             return;
         }
         tokenField.setText(settings.apiToken);
+        cookieField.setText(settings.sessionCookie);
         fontFamilyCombo.setSelectedItem(settings.fontFamily);
         setSpinnerValue(fontSizeSpinner, settings.fontSize);
         setSpinnerValue(topicLimitSpinner, settings.topicDisplayLimit);
@@ -257,6 +271,7 @@ public class V2EXSettingsConfigurable implements Configurable {
     public void disposeUIResources() {
         mainPanel = null;
         tokenField = null;
+        cookieField = null;
         fontFamilyCombo = null;
         fontSizeSpinner = null;
         topicLimitSpinner = null;

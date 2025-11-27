@@ -1,4 +1,4 @@
-package com.github.jsnjfz.logscope.toolWindow;
+﻿package com.github.jsnjfz.logscope.toolWindow;
 
 import com.github.jsnjfz.logscope.LogScopeBundle;
 import com.github.jsnjfz.logscope.settings.V2EXSettings;
@@ -9,7 +9,6 @@ import com.intellij.ui.components.ActionLink;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.util.ui.JBUI;
 import okhttp3.FormBody;
-import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -75,7 +74,7 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
 
     private final OkHttpClient.Builder clientBuilder;
 
-    private static final String FONT_SAMPLE_TEXT = "SAMPLE LOG TEXT 0123456789";
+    private static final String FONT_SAMPLE_TEXT = "SAMPLE LOG TEXT 0123456789 妫€娴嬩腑鏂囧瓧浣?;
     private static final int REPLIES_PER_PAGE = 20;
     private static final int IMAGE_URL_LENGTH_THRESHOLD = 60;
     private static final int IMAGE_URL_PREFIX_LENGTH = 25;
@@ -86,7 +85,9 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
             Pattern.CASE_INSENSITIVE
     );
     private static final Pattern TOPIC_ID_PATTERN = Pattern.compile("/t/(\\d+)", Pattern.CASE_INSENSITIVE);
-    private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
+    private static final Pattern ONCE_PATTERN = Pattern.compile("name=\"once\" value=\"(\\d+)\"");
+    private static final String WEB_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
     private JButton prevButton;
     private JButton nextButton;
@@ -951,75 +952,39 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
     }
 
     private ReplyResult submitReply(V2EXSettings settings, String content) {
+        String cookie = settings.sessionCookie == null ? "" : settings.sessionCookie.trim();
+        if (cookie.isEmpty()) {
+            return ReplyResult.failure(LogScopeBundle.message("error.reply.cookie"));
+        }
         OkHttpClient client = clientBuilder.proxy(getProxy(settings)).build();
-        ReplyResult modernResult = postReplyViaV2(client, settings.apiToken, content, currentTopicId);
-        if (modernResult != null) {
-            return modernResult;
-        }
-        return postReplyViaLegacy(client, settings.apiToken, content, currentTopicId);
-    }
-
-    private ReplyResult postReplyViaV2(OkHttpClient client, String token, String content, int topicId) {
-        String url = String.format("https://www.v2ex.com/api/v2/topics/%d/replies", topicId);
-        RequestBody body;
         try {
-            JSONObject payload = new JSONObject();
-            payload.put("content", content);
-            body = RequestBody.create(JSON_MEDIA_TYPE, payload.toString());
-        } catch (Exception ex) {
-            return ReplyResult.failure(LogScopeBundle.message("reply.status.failure", ex.getMessage()));
-        }
-
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Authorization", "Bearer " + token)
-                .post(body)
-                .build();
-
-        try (Response response = client.newCall(request).execute()) {
-            if (response.code() == 404 || response.code() == 405) {
-                return null;
-            }
-            String payload = responseBody(response);
-            if (response.isSuccessful()) {
-                return ReplyResult.success(LogScopeBundle.message("reply.status.success"));
-            }
-            String failureMessage = payload.isBlank() ? response.message() : payload;
-            return ReplyResult.failure(LogScopeBundle.message("reply.status.failure",
-                    response.code() + " " + failureMessage));
-        } catch (IOException ex) {
-            return ReplyResult.failure(LogScopeBundle.message("reply.status.failure", ex.getMessage()));
+            String once = fetchReplyOnceToken(client, cookie, currentTopicId);
+            return postReplyViaWeb(client, cookie, once, content, currentTopicId);
+        } catch (ReplySubmitException ex) {
+            return ReplyResult.failure(ex.getMessage());
         }
     }
 
-    private ReplyResult postReplyViaLegacy(OkHttpClient client, String token, String content, int topicId) {
+    private ReplyResult postReplyViaWeb(OkHttpClient client, String cookie, String once, String content, int topicId) {
         RequestBody formBody = new FormBody.Builder()
-                .add("topic_id", String.valueOf(topicId))
                 .add("content", content)
+                .add("once", once)
                 .build();
         Request request = new Request.Builder()
-                .url("https://www.v2ex.com/api/replies/create.json")
-                .header("Authorization", "Bearer " + token)
+                .url("https://www.v2ex.com/t/" + topicId)
+                .header("Cookie", cookie)
+                .header("User-Agent", WEB_USER_AGENT)
                 .post(formBody)
                 .build();
 
         try (Response response = client.newCall(request).execute()) {
-            String payload = responseBody(response);
-            if (response.isSuccessful()) {
-                String successMessage = LogScopeBundle.message("reply.status.success");
-                if (!payload.isBlank()) {
-                    try {
-                        JSONObject json = new JSONObject(payload);
-                        String serverMessage = json.optString("message");
-                        if (serverMessage != null && !serverMessage.isBlank()) {
-                            successMessage = serverMessage;
-                        }
-                    } catch (Exception ignored) {
-                        // ignore invalid payload
-                    }
-                }
-                return ReplyResult.success(successMessage);
+            if (response.request().url().encodedPath().startsWith("/signin")) {
+                return ReplyResult.failure(LogScopeBundle.message("error.reply.login"));
             }
+            if (response.isSuccessful()) {
+                return ReplyResult.success(LogScopeBundle.message("reply.status.success"));
+            }
+            String payload = response.body() != null ? response.body().string() : "";
             String failureMessage = payload.isBlank() ? response.message() : payload;
             return ReplyResult.failure(LogScopeBundle.message("reply.status.failure",
                     response.code() + " " + failureMessage));
@@ -1028,8 +993,29 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
         }
     }
 
-    private String responseBody(Response response) throws IOException {
-        return response.body() != null ? response.body().string() : "";
+    private String fetchReplyOnceToken(OkHttpClient client, String cookie, int topicId) throws ReplySubmitException {
+        Request request = new Request.Builder()
+                .url("https://www.v2ex.com/t/" + topicId)
+                .header("Cookie", cookie)
+                .header("User-Agent", WEB_USER_AGENT)
+                .build();
+        try (Response response = client.newCall(request).execute()) {
+            if (response.request().url().encodedPath().startsWith("/signin")) {
+                throw new ReplySubmitException(LogScopeBundle.message("error.reply.login"));
+            }
+            if (!response.isSuccessful()) {
+                throw new ReplySubmitException(LogScopeBundle.message("reply.status.failure",
+                        response.code() + " " + response.message()));
+            }
+            String html = response.body() != null ? response.body().string() : "";
+            Matcher matcher = ONCE_PATTERN.matcher(html);
+            if (matcher.find()) {
+                return matcher.group(1);
+            }
+            throw new ReplySubmitException(LogScopeBundle.message("error.reply.once"));
+        } catch (IOException ex) {
+            throw new ReplySubmitException(LogScopeBundle.message("reply.status.failure", ex.getMessage()));
+        }
     }
 
     private void updateReplyStatus(String message, ReplyFeedback feedback) {
@@ -1043,6 +1029,12 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
             default -> JBColor.GRAY;
         };
         replyStatusLabel.setForeground(color);
+    }
+
+    private static class ReplySubmitException extends Exception {
+        ReplySubmitException(String message) {
+            super(message);
+        }
     }
 
     private Font getDisplayFont(V2EXSettings settings) {
@@ -1226,6 +1218,7 @@ public class V2EXNewsPanel implements V2EXSettings.SettingsChangeListener {
         contentPanel.repaint();
     }
 } 
+
 
 
 
